@@ -1,0 +1,194 @@
+import os, random, logging
+from telegram import Update, InlineKeyboardButton as B, InlineKeyboardMarkup as K
+from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ContextTypes, PicklePersistence, filters)
+
+logging.basicConfig(level=logging.INFO)
+TOKEN = os.getenv("BOT_TOKEN")
+
+NIV = {"1": "🟢 Facile", "2": "🟡 Moyen", "3": "🔴 Difficile"}
+
+QUIZ = {
+    "1": [
+        ("Premier livre de la Bible ?", "Genèse", ["Exode", "Psaumes", "Matthieu"]),
+        ("Qui a construit l'arche ?", "Noé", ["Moïse", "Abraham", "David"]),
+        ("Combien d'apôtres Jésus a-t-il choisis ?", "12", ["7", "10", "40"]),
+        ("Dans quelle ville Jésus est-il né ?", "Bethléem", ["Nazareth", "Jérusalem", "Capharnaüm"]),
+        ("Qui a vaincu Goliath ?", "David", ["Samson", "Saül", "Josué"]),
+        ("Qui a été avalé par un grand poisson ?", "Jonas", ["Élie", "Daniel", "Pierre"]),
+        ("Qui a trahi Jésus ?", "Judas", ["Pierre", "Thomas", "Jean"]),
+        ("Qui a conduit Israël hors d'Égypte ?", "Moïse", ["Josué", "Aaron", "Salomon"]),
+    ],
+    "2": [
+        ("Qui est le premier homme dans la Bible ?", "Adam", ["Caïn", "Abel", "Noé"]),
+        ("Combien de jours Jésus a-t-il jeûné dans le désert ?", "40", ["7", "12", "30"]),
+        ("Qui fut jeté dans la fosse aux lions ?", "Daniel", ["Joseph", "Élie", "Jérémie"]),
+        ("Quel apôtre a renié Jésus trois fois ?", "Pierre", ["Jean", "André", "Philippe"]),
+        ("Quel est le dernier livre de la Bible ?", "Apocalypse", ["Jude", "Malachie", "Actes"]),
+        ("Quel roi est connu pour sa sagesse ?", "Salomon", ["David", "Saül", "Ézéchias"]),
+        ("Dans quel fleuve Jésus a-t-il été baptisé ?", "Jourdain", ["Nil", "Euphrate", "Tigre"]),
+        ("Comment s'appelle la mère de Jésus ?", "Marie", ["Marthe", "Élisabeth", "Ruth"]),
+    ],
+    "3": [
+        ("Quel apôtre était collecteur d'impôts ?", "Matthieu", ["Marc", "Luc", "Jacques"]),
+        ("Qui a remplacé Judas parmi les Douze ?", "Matthias", ["Barnabas", "Silas", "Timothée"]),
+        ("Qui fut le premier martyr chrétien ?", "Étienne", ["Jacques", "Pierre", "Paul"]),
+        ("Combien de livres compte la Bible protestante ?", "66", ["73", "27", "39"]),
+        ("Quel prophète fut enlevé au ciel dans un char de feu ?", "Élie", ["Élisée", "Ésaïe", "Jérémie"]),
+        ("Quel roi fit tuer Urie pour épouser Bethsabée ?", "David", ["Salomon", "Saül", "Achab"]),
+        ("Dans quel livre trouve-t-on d'abord les dix commandements ?", "Exode", ["Lévitique", "Deutéronome", "Nombres"]),
+        ("Quel apôtre s'appelait aussi Didyme ?", "Thomas", ["Barthélemy", "Simon", "Jude"]),
+    ],
+}
+
+MOTS = {
+    "1": ["BIBLE", "EGLISE", "PRIERE", "NOEL", "ANGE", "CROIX"],
+    "2": ["MIRACLE", "PARABOLE", "DISCIPLE", "EVANGILE", "BAPTEME", "ALLIANCE"],
+    "3": ["RESURRECTION", "TRANSFIGURATION", "PENTECOTE", "APOCALYPSE",
+          "SANCTIFICATION", "INTERCESSION"],
+}
+NOMBRE_MAX = {"1": 50, "2": 100, "3": 500}
+
+PFC = {"pierre": "🪨", "feuille": "📄", "ciseaux": "✂️"}
+GAGNE = {("pierre", "ciseaux"), ("feuille", "pierre"), ("ciseaux", "feuille")}
+
+
+def pts(update, context, jeu, n):
+    s = context.user_data.setdefault("scores", {})
+    s[jeu] = s.get(jeu, 0) + n
+    usr = update.effective_user
+    c = context.bot_data.setdefault("classement", {})
+    e = c.setdefault(usr.id, {"nom": usr.first_name, "pts": 0})
+    e["nom"] = usr.first_name
+    e["pts"] += n
+
+
+def fin_kb(jeu, niv=None):
+    rejouer = f"niv:{jeu}:{niv}" if niv else jeu
+    return K([[B("🔁 Rejouer", callback_data=rejouer), B("🏠 Menu", callback_data="menu")]])
+
+
+async def menu(update, context):
+    context.user_data.pop("mode", None)
+    kb = K([
+        [B("📖 Quiz biblique", callback_data="lv:quiz"), B("🔤 Pendu", callback_data="lv:pendu")],
+        [B("🔢 Devine le nombre", callback_data="lv:nombre"), B("✊ Pierre-feuille-ciseaux", callback_data="pfc")],
+        [B("🏆 Classement", callback_data="classement"), B("📊 Mes scores", callback_data="scores")],
+    ])
+    await update.effective_message.reply_text("🎮 Choisissez un jeu :", reply_markup=kb)
+
+
+async def niveaux(update, jeu):
+    kb = K([[B(n, callback_data=f"niv:{jeu}:{k}") for k, n in NIV.items()]])
+    await update.effective_message.reply_text("Choisissez la difficulté :", reply_markup=kb)
+
+
+async def classement(update, context):
+    c = context.bot_data.get("classement", {})
+    top = sorted(c.values(), key=lambda e: e["pts"], reverse=True)[:10]
+    med = ["🥇", "🥈", "🥉"]
+    lignes = [f"{med[i] if i < 3 else str(i + 1) + '.'} {e['nom']} — {e['pts']} pts"
+              for i, e in enumerate(top)]
+    txt = "\n".join(lignes) or "Personne n'a encore de points."
+    await update.effective_message.reply_text(
+        f"🏆 Classement général\n\n{txt}", reply_markup=K([[B("🏠 Menu", callback_data="menu")]]))
+
+
+# ---------- QUIZ ----------
+async def quiz_question(update, context):
+    u = context.user_data
+    st = u["quiz"]
+    if st["i"] >= len(st["qs"]):
+        gain = st["score"] * st["m"]
+        pts(update, context, "Quiz", gain)
+        await update.effective_message.reply_text(
+            f"🏁 Terminé ! {st['score']}/{len(st['qs'])} bonnes réponses\n+{gain} points",
+            reply_markup=fin_kb("quiz", st["niv"]))
+        return
+    q, bonne, faux = st["qs"][st["i"]]
+    opts = [bonne] + faux
+    random.shuffle(opts)
+    st["opts"], st["bonne"] = opts, bonne
+    kb = K([[B(o, callback_data=f"qz:{k}")] for k, o in enumerate(opts)])
+    await update.effective_message.reply_text(
+        f"{NIV[st['niv']]} — Question {st['i'] + 1}/{len(st['qs'])}\n\n{q}", reply_markup=kb)
+
+
+async def quiz_reponse(update, context, k):
+    st = context.user_data.get("quiz")
+    if not st or "opts" not in st:
+        return
+    if st["opts"][k] == st["bonne"]:
+        st["score"] += 1
+        await update.effective_message.reply_text("✅ Bonne réponse !")
+    else:
+        await update.effective_message.reply_text(f"❌ Non, c'était : {st['bonne']}")
+    st.pop("opts")
+    st["i"] += 1
+    await quiz_question(update, context)
+
+
+# ---------- PENDU ----------
+def pendu_affiche(st):
+    mot = " ".join(l if l in st["ok"] else "_" for l in st["mot"])
+    return f"{mot}\n\n{'❤️' * (7 - st['err'])}{'🖤' * st['err']}"
+
+
+def pendu_clavier(st):
+    libres = [l for l in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" if l not in st["ok"] | st["ko"]]
+    return K([[B(l, callback_data=f"pd:{l}") for l in libres[i:i + 7]]
+              for i in range(0, len(libres), 7)])
+
+
+async def pendu_lettre(update, context, l):
+    u = context.user_data
+    st = u.get("pendu")
+    if not st:
+        return
+    if l in st["mot"]:
+        st["ok"].add(l)
+    else:
+        st["ko"].add(l)
+        st["err"] += 1
+    m = update.effective_message
+    if all(c in st["ok"] for c in st["mot"]):
+        gain = 2 * int(st["niv"])
+        pts(update, context, "Pendu", gain)
+        u.pop("pendu")
+        await m.reply_text(f"🎉 Gagné ! Le mot était {st['mot']}\n+{gain} points",
+                           reply_markup=fin_kb("pendu", st["niv"]))
+    elif st["err"] >= 7:
+        u.pop("pendu")
+        await m.reply_text(f"💀 Perdu ! Le mot était {st['mot']}",
+                           reply_markup=fin_kb("pendu", st["niv"]))
+    else:
+        await m.reply_text(pendu_affiche(st), reply_markup=pendu_clavier(st))
+
+
+# ---------- ROUTEUR ----------
+async def bouton(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    d, u, m = q.data, context.user_data, q.message
+
+    if d == "menu":
+        await menu(update, context)
+    elif d == "classement":
+        await classement(update, context)
+    elif d.startswith("lv:"):
+        await niveaux(update, d[3:])
+    elif d.startswith("niv:"):
+        _, jeu, niv = d.split(":")
+        if jeu == "quiz":
+            u["quiz"] = {"qs": random.sample(QUIZ[niv], 5), "i": 0, "score": 0,
+                         "niv": niv, "m": int(niv)}
+            await quiz_question(update, context)
+        elif jeu == "pendu":
+            u["pendu"] = {"mot": random.choice(MOTS[niv]), "ok": set(), "ko": set(),
+                          "err": 0, "niv": niv}
+            await m.reply_text(pendu_affiche(u["pendu"]), reply_markup=pendu_clavier(u["pendu"]))
+        elif jeu == "nombre":
+            mx = NOMBRE_MAX[niv]
+            u.update(mode="nombre", secret=random.randint(1, mx), essais=0, mx=mx, niv=niv)
+            await m.reply_text(f"Je pense à un nombre entre 1 et {mx}. Envoyez votre proposition !")
+    elif d.startswith(
